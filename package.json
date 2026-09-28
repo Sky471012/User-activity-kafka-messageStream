@@ -1,0 +1,17 @@
+{
+  "name": "kafka-user-activity",
+  "version": "1.0.0",
+  "description": "Learning project: Express API -> Kafka topic -> Kafka consumer",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "consumer": "node consumer.js"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "kafkajs": "^2.2.4",
+    "mongoose": "^9.10.2"
+  }
+}
