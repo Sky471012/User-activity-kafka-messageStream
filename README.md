@@ -3,7 +3,7 @@
 A minimal Node.js learning project that demonstrates the basic Kafka flow:
 
 ```
-Express API (producer)  →  Kafka topic: user-events  →  Node.js consumer
+Client → Express API (producer) → Kafka topic: user-events → Node.js consumer → MongoDB Atlas
 ```
 
 Built to learn Kafka fundamentals — not a production application.
@@ -13,7 +13,8 @@ Built to learn Kafka fundamentals — not a production application.
 - Node.js (JavaScript, no TypeScript)
 - Express
 - [KafkaJS](https://kafka.js.org/)
-- Confluent Cloud (managed Kafka, SASL/SSL)
+- Local Apache Kafka 4.x (KRaft mode, no ZooKeeper, plaintext `localhost:9092`)
+- MongoDB Atlas + Mongoose
 - dotenv
 
 ## Project structure
@@ -21,9 +22,12 @@ Built to learn Kafka fundamentals — not a production application.
 ```
 kafka-user-activity/
 ├── server.js            # Express API + producer startup
-├── consumer.js          # Kafka consumer (separate process)
+├── consumer.js          # Kafka consumer -> MongoDB (separate process)
 ├── config/
-│   └── kafka.js         # KafkaJS client, reads .env
+│   ├── kafka.js         # KafkaJS client, reads .env
+│   └── db.js            # Mongoose connection
+├── models/
+│   └── Event.js         # Event schema (userId, type, data, timestamp)
 ├── services/
 │   └── producer.js      # connect + publish helpers
 ├── package.json
@@ -33,18 +37,19 @@ kafka-user-activity/
 
 ## Setup
 
+Prerequisites: local Kafka 4.x running in KRaft mode on `localhost:9092`, with the topic `user-events` created.
+
 ```bash
 npm install
 cp .env.example .env
 ```
 
-Fill `.env` with your Confluent Cloud values (Cluster -> Topics -> your cluster gives the broker address; API Keys gives the username/password):
+`.env` — Kafka is local (no SSL, no username/password); MongoDB stays in Atlas (Atlas -> Connect -> Drivers gives the URI):
 
 ```env
-KAFKA_BROKERS=pkc-xxxxx.us-east-1.aws.confluent.cloud:9092
-KAFKA_USERNAME=your-api-key
-KAFKA_PASSWORD=your-api-secret
+KAFKA_BROKERS=localhost:9092
 KAFKA_TOPIC=user-events
+MONGODB_URI=mongodb+srv://user:password@cluster0.xxxxx.mongodb.net/user-events
 PORT=3000
 ```
 
@@ -74,6 +79,7 @@ npm run consumer
 Expected logs:
 
 ```
+MongoDB connected
 Consumer connected
 Subscribed to topic: user-events
 ```
@@ -109,20 +115,28 @@ User: u101
 Type: product_view
 Data: {"productId":"p501"}
 Timestamp: 2026-09-28T10:15:00.000Z
+Saved to MongoDB: product_view by u101
 ```
 
 Missing `userId` or `type` returns HTTP 400.
 
+Query what was saved:
+
+```js
+db.events.find({ userId: "u101" })
+```
+
 ## How it works
 
 1. `POST /events` validates `userId` and `type`, then builds an event object with a `timestamp`.
-2. `services/producer.js` publishes it to the `user-events` topic as JSON, using `userId` as the message key (same user -> same partition -> ordered).
-3. `consumer.js` runs in the `activity-consumer-group`, reads messages, and prints them.
-4. Nothing is stored anywhere — Kafka is the buffer between the two processes.
+2. `services/producer.js` publishes it to the `user-events` topic as JSON, using `userId` as the message key (same user -> same partition -> ordered). The API never writes to MongoDB.
+3. `consumer.js` connects to MongoDB first, runs in the `activity-consumer-group`, and reads messages.
+4. For each message: parse -> log -> `Event.create()` -> log the save. The message is only treated as processed after the save succeeds; if the save throws, the consumer fails loudly instead of pretending it worked.
+5. Kafka is the buffer between the API and the database — the API and the DB never talk to each other directly.
 
 ## Concepts used here
 
-- **Broker** — the Kafka server storing and serving the data (your Confluent Cloud cluster).
+- **Broker** — the Kafka server storing and serving the data (your local broker at `localhost:9092`, KRaft mode).
 - **Topic** — the named log everyone reads/writes: `user-events`.
 - **Producer** — the client publishing events (`server.js` + `services/producer.js`).
 - **Consumer** — the client reading events (`consumer.js`).
@@ -133,6 +147,11 @@ Missing `userId` or `type` returns HTTP 400.
 ## Troubleshooting
 
 - `KAFKA_BROKERS is missing` — you forgot to create/fill `.env`.
-- `Connection error ... ENOTFOUND` — broker address typo or wrong network.
-- `SASL authentication failed` — wrong API key/secret, or key belongs to a different cluster.
+- `MONGODB_URI is missing` — same, add the Atlas connection string to `.env`.
+- `Connection error ... ECONNREFUSED localhost:9092` — your local Kafka broker is not running (or not on 9092).
+- `Client network socket disconnected before secure TLS connection was established` — your `.env` still has Confluent Cloud values/credentials; local Kafka is plaintext, so use `localhost:9092` with empty `KAFKA_USERNAME`/`KAFKA_PASSWORD`.
+- `UnknownTopicOrPartition` — create the topic first: `kafka-topics.sh --create --topic user-events --bootstrap-server localhost:9092 --partitions 1 --replication-factor 1`.
+- `MongooseServerSelectionError` — bad Atlas URI, or your IP is not allowed in Atlas Network Access.
+- `Consumer error: ...` after `Saved` was never logged — the MongoDB save failed, so the message was not marked processed. Fix the DB and restart the consumer; it resumes from the last committed offset.
+- KafkaJS partitioner warning (`switched default partitioner`) — harmless; it only tells you KafkaJS v2 partitions differently from v1.
 - Consumer prints nothing — events sent before it subscribed are only seen if `fromBeginning` is true (it is), otherwise start the consumer first and send new events.

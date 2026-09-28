@@ -1,6 +1,6 @@
 const { kafka, topic } = require('../config/kafka');
 
-const producer = kafka.producer();
+const producer = kafka.producer(); //producer of messgages by kafka
 
 async function connectProducer() {
   await producer.connect();

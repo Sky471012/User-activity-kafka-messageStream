@@ -7,19 +7,13 @@ const brokers = (process.env.KAFKA_BROKERS || '')
   .filter(Boolean);
 
 if (brokers.length === 0) {
-  console.error('KAFKA_BROKERS is missing. Copy .env.example to .env and fill it in.');
+  console.error('KAFKA_BROKERS is missing. Copy .env.example to .env.');
   process.exit(1);
 }
 
 const kafka = new Kafka({
   clientId: 'user-activity-app',
   brokers,
-  ssl: true,
-  sasl: {
-    mechanism: 'plain',
-    username: process.env.KAFKA_USERNAME,
-    password: process.env.KAFKA_PASSWORD,
-  },
 });
 
 module.exports = {
